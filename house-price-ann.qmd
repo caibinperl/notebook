@@ -1,0 +1,179 @@
+---
+title: "人工神经网络预测房价"
+format: 
+  gfm 
+---
+
+
+```{python}
+import pandas as pd
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+```
+
+
+## 加载和预处理Boston房价数据集
+
+```{python}
+train_df = pd.read_csv('data/boston_housing/train_data.csv')
+test_df = pd.read_csv('data/boston_housing/test_data.csv')
+```
+
+
+```{python}
+train_data = train_df.iloc[:, :-1].values # 训练数据特性值
+train_target = train_df.iloc[:, -1].values # 训练数据目标值
+test_data = test_df.iloc[:, :-1].values # 测试数据特征值
+test_target = test_df.iloc[:, -1].values # 测试数据目标值
+```
+
+```{python}
+train_data = torch.from_numpy(train_data).to(torch.float32)
+train_target = torch.from_numpy(train_target).to(torch.float32)
+test_data = torch.from_numpy(test_data).to(torch.float32)
+test_target = torch.from_numpy(test_target).to(torch.float32)
+```
+
+## 构建网络
+
+```{python}
+def build_model():
+  model = nn.Sequential(
+    nn.Linear(train_data.shape[1], 64),
+    nn.ReLU(),
+    nn.Linear(64, 64),
+    nn.ReLU(),
+    nn.Linear(64, 1)
+  )
+  return model
+
+```
+
+```{python}
+loss = nn.MSELoss()
+learing_rate = 1e-2
+```
+
+## K折交叉验证
+
+```{python}
+def train(model, train_data, train_target, val_data, val_target, epochs, learing_rate):
+  val_mses = []
+  optimizer = optim.RMSprop(model.parameters(), lr=learing_rate)
+  for epoch in range(1, epochs + 1):
+    train_pred = model(train_data)
+    train_pred = train_pred.view(train_pred.shape[0])
+    train_loss = loss(train_pred, train_target)
+    val_pred = model(val_data)
+    val_pred = val_pred.view(val_pred.shape[0])
+    val_loss = loss(val_pred, val_target)
+    optimizer.zero_grad()
+    train_loss.backward()
+    optimizer.step()
+    val_mses.append(val_loss.item())
+  return val_mses
+
+```
+
+```{python}
+k = 4
+num_val_samples = len(train_data) // k
+epochs = 300
+all_val_mses = []
+for i in range(k):
+  print('processiong fold #', i)
+  val_data = train_data[i * num_val_samples : (i+1) * num_val_samples]
+  val_target = train_target[i * num_val_samples : (i+1) * num_val_samples]
+  partial_train_data = torch.concat([
+    train_data[: i * num_val_samples], 
+    train_data[(i + 1) * num_val_samples: ]], axis=0)
+  partial_train_target = torch.concat([
+    train_target[: i * num_val_samples], 
+    train_target[(i + 1) * num_val_samples: ]], axis=0)
+  model = build_model()
+  val_mses = train(model, partial_train_data, partial_train_target, val_data, val_target, epochs, learing_rate)
+  all_val_mses.append(val_mses)
+
+```
+
+```{python}
+average_val_mse = [np.mean([x[i] for x in all_val_mses]) for i in range(epochs)]
+```
+
+```{python}
+np.argmin(average_val_mse)
+```
+
+
+```{python}
+import matplotlib.pyplot as plt
+average_mse = average_val_mse[50:]
+plt.plot(range(1, len(average_mse) + 1), average_mse)
+plt.xlabel('Epochs')
+plt.ylabel('Validation MAE')
+plt.show()
+plt.close()
+
+```
+
+## 训练最终模型
+
+```{python}
+def fit(model, train_data, train_target, epochs, learing_rate):
+  optimizer = optim.RMSprop(model.parameters(), lr=learing_rate)
+  for epoch in range(1, epochs + 1):
+    train_pred = model(train_data)
+    train_pred = train_pred.view(train_pred.shape[0])
+    train_loss = loss(train_pred, train_target)
+    optimizer.zero_grad()
+    train_loss.backward()
+    optimizer.step()
+  return model
+
+```
+
+
+```{python}
+model = build_model()
+model = fit(model, train_data, train_target, 100, learing_rate)
+```
+
+## 测试模型
+
+```{python}
+def mae(y_hat, y):
+  mae = torch.mean(torch.abs(y_hat - y))
+  return mae.item()
+  
+```
+
+
+```{python}
+def evaluate(model, test_data, test_target):
+  test_pred = model(test_data)
+  test_pred = test_pred.view(test_pred.shape[0])
+  test_loss = loss(test_pred, test_target)
+  test_mse = test_loss.item()
+  test_mae = mae(test_pred, test_target)
+  return test_mse, test_mae
+
+```
+
+
+```{python}
+test_mse, test_mae = evaluate(model, test_data, test_target)
+print(f'MSE: {test_mse},  MAE: {test_mae}')
+```
+
+```{python}
+torch.save(model, 'data/boston_housing/ann.pt')
+```
+
+```{python}
+ann_model = torch.load('data/boston_housing/ann.pt')
+test_mse, test_mae = evaluate(ann_model, test_data, test_target)
+print(f'MSE: {test_mse},  MAE: {test_mae}')
+```
+
